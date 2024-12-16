@@ -1,7 +1,7 @@
 import json
 from google.cloud import storage, firestore
 import vertexai
-from vertexai.preview.language_models import ChatModel
+from vertexai.preview.generative_models import GenerativeModel
 
 PROJECT_ID = "gid-ai-5"
 REGION = "us-central1"
@@ -13,6 +13,9 @@ TRAITS_DEF_FILE = "Gid_traits_definitions.json"
 COMPANY_PROFILES_FILE = "Gid_company_profiles.json"
 ACCESS_RULES_FILE = "Gid_access_rules.json"
 COMPANY_DATA_FILE = "company_info/ABC/company_data.json"
+
+# Endpoint du modèle réglé
+ENDPOINT_ID = "1672569391591456768"
 
 storage_client = storage.Client(project=PROJECT_ID)
 firestore_client = firestore.Client(project=PROJECT_ID)
@@ -74,7 +77,6 @@ def construct_system_prompt(guidelines, traits_def, applied_traits, company_data
         prompt += "\n## Employee History Context\n"
         prompt += json.dumps(employee_history_data, indent=2)
 
-    # retrieved_docs reste vide tant que vous n'avez pas de vector store
     if retrieved_docs:
         prompt += "\n## Retrieved Documents (RAG)\n"
         for doc in retrieved_docs:
@@ -83,28 +85,25 @@ def construct_system_prompt(guidelines, traits_def, applied_traits, company_data
     return prompt
 
 def interact_with_user(employee_id, user_message):
-    # Charger données globales
+    # Charger les données globales
     guidelines = load_json_from_gcs(BUCKET_NAME, GUIDELINES_FILE)
     traits_def = load_json_from_gcs(BUCKET_NAME, TRAITS_DEF_FILE)
     access_rules = load_json_from_gcs(BUCKET_NAME, ACCESS_RULES_FILE)
     company_data = load_json_from_gcs(BUCKET_NAME, COMPANY_DATA_FILE)
     applied_traits = load_traits_for_company(COMPANY_ID)
 
-    # Charger l'historique de l'employé
     employee_history_data = load_employee_history(COMPANY_ID, employee_id)
 
-    retrieved_docs = []  # Pas de vector store pour l'instant
+    retrieved_docs = []
 
     system_prompt = construct_system_prompt(guidelines, traits_def, applied_traits, company_data, employee_history_data, retrieved_docs)
     full_prompt = system_prompt + "\nUser: " + user_message + "\nGid:"
 
-    # Initialiser Vertex AI pour le modèle Gemini Chat
     vertexai.init(project=PROJECT_ID, location=REGION)
-    chat_model = ChatModel.from_pretrained("chat-bison@latest")
-    chat = chat_model.start_chat()
+    tuned_model_endpoint_name = f"projects/{PROJECT_ID}/locations/{REGION}/endpoints/{ENDPOINT_ID}"
+    tuned_model = GenerativeModel(tuned_model_endpoint_name)
 
-    # Envoyer le prompt complet
-    gid_answer = chat.send_message(full_prompt)
+    gid_answer = tuned_model.generate_content(full_prompt)
 
     print("Gid:", gid_answer)
 
