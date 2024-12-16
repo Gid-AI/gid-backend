@@ -84,21 +84,15 @@ def construct_system_prompt(guidelines, traits_def, applied_traits, company_data
 
     return prompt
 
-def interact_with_user(employee_id, user_message):
-    # Charger les données globales
-    guidelines = load_json_from_gcs(BUCKET_NAME, GUIDELINES_FILE)
-    traits_def = load_json_from_gcs(BUCKET_NAME, TRAITS_DEF_FILE)
-    access_rules = load_json_from_gcs(BUCKET_NAME, ACCESS_RULES_FILE)
-    company_data = load_json_from_gcs(BUCKET_NAME, COMPANY_DATA_FILE)
-    applied_traits = load_traits_for_company(COMPANY_ID)
-
+def interact_with_user(employee_id, user_message, guidelines, traits_def, company_data, applied_traits):
+    # Charger l'historique de l'employé (rechargé à chaque interaction pour prendre en compte les mises à jour)
     employee_history_data = load_employee_history(COMPANY_ID, employee_id)
-
     retrieved_docs = []
 
     system_prompt = construct_system_prompt(guidelines, traits_def, applied_traits, company_data, employee_history_data, retrieved_docs)
     full_prompt = system_prompt + "\nUser: " + user_message + "\nGid:"
 
+    # Appeler le modèle réglé via endpoint
     vertexai.init(project=PROJECT_ID, location=REGION)
     tuned_model_endpoint_name = f"projects/{PROJECT_ID}/locations/{REGION}/endpoints/{ENDPOINT_ID}"
     tuned_model = GenerativeModel(tuned_model_endpoint_name)
@@ -117,7 +111,24 @@ def interact_with_user(employee_id, user_message):
     update_employee_interactions(COMPANY_ID, employee_id, "regular_interactions", new_interaction)
     print("Interaction recorded in Firestore.")
 
-if __name__ == "__main__":
+def main():
     employee_id = "EMP001"
-    user_message = "Hi Gid, can you explain your role and how you help me in this company?"
-    interact_with_user(employee_id, user_message)
+    # Charger données globales une seule fois
+    guidelines = load_json_from_gcs(BUCKET_NAME, GUIDELINES_FILE)
+    traits_def = load_json_from_gcs(BUCKET_NAME, TRAITS_DEF_FILE)
+    # company_profiles = load_json_from_gcs(BUCKET_NAME, COMPANY_PROFILES_FILE) # si besoin
+    access_rules = load_json_from_gcs(BUCKET_NAME, ACCESS_RULES_FILE)
+    company_data = load_json_from_gcs(BUCKET_NAME, COMPANY_DATA_FILE)
+    applied_traits = load_traits_for_company(COMPANY_ID)
+
+    print("Interactive mode. Type your message and press Enter. Type 'exit' or 'quit' to end.")
+    while True:
+        user_message = input("You: ")
+        if user_message.lower() in ["exit", "quit"]:
+            break
+        interact_with_user(employee_id, user_message, guidelines, traits_def, company_data, applied_traits)
+
+    print("Session ended.")
+
+if __name__ == "__main__":
+    main()
