@@ -1,24 +1,21 @@
 import json
 from google.cloud import storage, firestore
-from google.cloud import aiplatform
-# On suppose que vous avez une fonction pour le vector store
-# from vector_store import retrieve_relevant_docs
+import vertexai
+from vertexai.preview.language_models import ChatModel
 
 PROJECT_ID = "gid-ai-5"
 REGION = "us-central1"
 COMPANY_ID = "ABC"
 BUCKET_NAME = "gid9_training_us_central1"
 
-ENDPOINT_NAME = "projects/gid-ai-5/locations/us-central1/endpoints/1672569391591456768"
-
-storage_client = storage.Client(project=PROJECT_ID)
-firestore_client = firestore.Client(project=PROJECT_ID)
-
 GUIDELINES_FILE = "Gid_guidelines.json"
 TRAITS_DEF_FILE = "Gid_traits_definitions.json"
 COMPANY_PROFILES_FILE = "Gid_company_profiles.json"
 ACCESS_RULES_FILE = "Gid_access_rules.json"
 COMPANY_DATA_FILE = "company_info/ABC/company_data.json"
+
+storage_client = storage.Client(project=PROJECT_ID)
+firestore_client = firestore.Client(project=PROJECT_ID)
 
 def load_json_from_gcs(bucket_name, file_name):
     bucket = storage_client.bucket(bucket_name)
@@ -52,11 +49,7 @@ def update_employee_interactions(company_id, employee_id, new_interaction_catego
     emp_data["interactions"][new_interaction_category].append(new_interaction_data)
     doc_ref.set(emp_data, merge=True)
 
-def construct_system_prompt(guidelines, traits_def, applied_traits, company_data, employee_history_data, retrieved_docs):
-    # guidelines, traits_def, applied_traits, company_data sont les mêmes qu'avant
-    # employee_history_data: l'historique complet de l'employé
-    # retrieved_docs: documents pertinents du vector store (RAG), si vous les avez
-
+def construct_system_prompt(guidelines, traits_def, applied_traits, company_data, employee_history_data, retrieved_docs=[]):
     absolute_guidelines = guidelines["absolute_guidelines"]
     standard_guidelines = guidelines["standard_guidelines"]
 
@@ -81,72 +74,51 @@ def construct_system_prompt(guidelines, traits_def, applied_traits, company_data
         prompt += "\n## Employee History Context\n"
         prompt += json.dumps(employee_history_data, indent=2)
 
-    if retrieved_docs and len(retrieved_docs) > 0:
+    # retrieved_docs reste vide tant que vous n'avez pas de vector store
+    if retrieved_docs:
         prompt += "\n## Retrieved Documents (RAG)\n"
         for doc in retrieved_docs:
             prompt += f"\nTitle: {doc['title']}\nContent: {doc['content']}\n"
 
     return prompt
 
-def call_vertex_ai(endpoint_name, prompt):
-    aiplatform.init(project=PROJECT_ID, location=REGION)
-    endpoint = aiplatform.Endpoint(endpoint_name=endpoint_name)
-    instances = [{"content": prompt}]
-    parameters = {
-        "temperature": 0.2,
-        "maxOutputTokens": 1024,
-        "topP": 0.95,
-        "topK": 40
-    }
-    response = endpoint.predict(instances=instances, parameters=parameters)
-    return response.predictions
-
 def interact_with_user(employee_id, user_message):
-    # 1. Charger données globales (on peut les charger une fois pour toutes au début du script)
+    # Charger données globales
     guidelines = load_json_from_gcs(BUCKET_NAME, GUIDELINES_FILE)
     traits_def = load_json_from_gcs(BUCKET_NAME, TRAITS_DEF_FILE)
-    # company_profiles = load_json_from_gcs(BUCKET_NAME, COMPANY_PROFILES_FILE) # si nécessaire
     access_rules = load_json_from_gcs(BUCKET_NAME, ACCESS_RULES_FILE)
     company_data = load_json_from_gcs(BUCKET_NAME, COMPANY_DATA_FILE)
     applied_traits = load_traits_for_company(COMPANY_ID)
 
-    # 2. Charger l'historique employé actuel
+    # Charger l'historique de l'employé
     employee_history_data = load_employee_history(COMPANY_ID, employee_id)
 
-    # 3. Récupérer documents pertinents via RAG (si vous avez un vector store)
-    # retrieved_docs = retrieve_relevant_docs(user_message) # si non dispo, mettez retrieved_docs = []
-    retrieved_docs = []  # si pas de vector store, on laisse vide
+    retrieved_docs = []  # Pas de vector store pour l'instant
 
-    # 4. Construire le prompt
     system_prompt = construct_system_prompt(guidelines, traits_def, applied_traits, company_data, employee_history_data, retrieved_docs)
     full_prompt = system_prompt + "\nUser: " + user_message + "\nGid:"
 
-    # 5. Appeler Vertex AI
-    response = call_vertex_ai(ENDPOINT_NAME, full_prompt)
-    gid_answer = response[0]["content"] if response and len(response) > 0 else "No answer"
+    # Initialiser Vertex AI pour le modèle Gemini Chat
+    vertexai.init(project=PROJECT_ID, location=REGION)
+    chat_model = ChatModel.from_pretrained("chat-gemini@latest")
+    chat = chat_model.start_chat()
 
-    # 6. Afficher la réponse
+    # Envoyer le prompt complet
+    gid_answer = chat.send_message(full_prompt)
+
     print("Gid:", gid_answer)
 
-    # 7. Mettre à jour l'historique de l'employé avec cette nouvelle interaction
     new_interaction = {
         "person_name": "Gid (AI Assistant)",
-        "date": "2024-10-10T09:00:00Z",  # idéalement dynamique
+        "date": "2024-10-10T09:00:00Z",
         "method": "via Gid",
         "description": f"User asked: {user_message}\nGid answered: {gid_answer}"
     }
-    # Catégorie d'interaction : on peut choisir en fonction du contexte, ici on met "regular_interactions"
-    update_employee_interactions(COMPANY_ID, employee_id, "regular_interactions", new_interaction)
 
-    # Lors du prochain message, la fonction sera rappelée, rechargera l'historique,
-    # et Gid aura l'historique mis à jour.
+    update_employee_interactions(COMPANY_ID, employee_id, "regular_interactions", new_interaction)
+    print("Interaction recorded in Firestore.")
 
 if __name__ == "__main__":
     employee_id = "EMP001"
-    # Simuler une conversation multi-tours
-    user_message = "Hi Gid, can you explain your role?"
-    interact_with_user(employee_id, user_message)
-
-    # Plus tard, un second message:
-    user_message = "Thanks, can you help me set a new career goal?"
+    user_message = "Hi Gid, can you explain your role and how you help me in this company?"
     interact_with_user(employee_id, user_message)
