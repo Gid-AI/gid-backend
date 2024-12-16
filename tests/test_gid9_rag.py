@@ -100,7 +100,7 @@ def interact_with_user(employee_id, user_message):
 
     # Initialiser Vertex AI pour le modèle Gemini Chat
     vertexai.init(project=PROJECT_ID, location=REGION)
-    chat_model = ChatModel.from_pretrained("chat-gemini@latest")
+    chat_model = ChatModel.from_pretrained("chat-bison@latest")
     chat = chat_model.start_chat()
 
     # Envoyer le prompt complet
